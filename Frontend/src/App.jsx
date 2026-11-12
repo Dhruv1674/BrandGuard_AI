@@ -6,10 +6,19 @@ import {
   BadgeCheck, BookOpen, Check, CheckCircle2, ChevronDown, CircleHelp,
   Clock3, FileCheck2, FileText, Filter, Gauge, LayoutDashboard,
   LoaderCircle, Menu, Plus, RefreshCw, Search, Shield, ShieldAlert,
-  ShieldCheck, Sparkles, X, Zap
+  ShieldCheck, Sparkles, X, Zap, Upload, Image, File
 } from 'lucide-react';
 
 const API = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/$/, '');
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+const ALLOWED_FILE_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf'
+];
 
 const cx = (...v) => v.filter(Boolean).join(' ');
 
@@ -22,10 +31,12 @@ const date = value =>
     : '—';
 
 async function request(path, options = {}) {
+  const isFormData = options.body instanceof FormData;
+
   const response = await fetch(`${API}${path}`, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers || {})
     }
   });
@@ -50,6 +61,7 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [query, setQuery] = useState('');
   const [auditContent, setAuditContent] = useState('');
+  const [auditFile, setAuditFile] = useState(null);
   const [auditing, setAuditing] = useState(false);
   const [auditResult, setAuditResult] = useState(null);
   const [showBrandForm, setShowBrandForm] = useState(false);
@@ -178,25 +190,77 @@ function App() {
     }
   }
 
+  function handleFileChange(e) {
+    const file = e.target.files?.[0];
+
+    if (!file) {
+      setAuditFile(null);
+      return;
+    }
+
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+      notify('error', 'Only JPG, PNG, WEBP and PDF files are allowed.');
+      e.target.value = '';
+      setAuditFile(null);
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      notify('error', 'File size must be 10 MB or less.');
+      e.target.value = '';
+      setAuditFile(null);
+      return;
+    }
+
+    setAuditFile(file);
+  }
+
   async function runAudit(e) {
     e.preventDefault();
 
-    if (!selectedBrand || !auditContent.trim()) return;
+    if (!selectedBrand || (!auditContent.trim() && !auditFile)) {
+      notify('error', 'Enter content or select an image/PDF.');
+      return;
+    }
 
     setAuditing(true);
     setAuditResult(null);
 
     try {
-      const result = await request('/audits/check', {
-        method: 'POST',
-        body: JSON.stringify({
+      let body;
+      let headers = {};
+
+      if (auditFile) {
+        body = new FormData();
+        body.append('brandId', selectedBrand);
+        body.append('file', auditFile);
+
+        if (auditContent.trim()) {
+          body.append('content', auditContent);
+        }
+      } else {
+        body = JSON.stringify({
           brandId: selectedBrand,
           content: auditContent
-        })
+        });
+
+        headers['Content-Type'] = 'application/json';
+      }
+
+      const result = await request('/audits/check', {
+        method: 'POST',
+        headers,
+        body
       });
 
       setAuditResult(result.audit);
       setAudits(old => [result.audit, ...old]);
+
+      setAuditContent('');
+      setAuditFile(null);
+
+      const fileInput = document.getElementById('audit-file-input');
+      if (fileInput) fileInput.value = '';
 
       notify('success', 'Content audit completed and saved.');
     } catch (e) {
@@ -206,7 +270,6 @@ function App() {
     }
   }
 
-  // Updated human review function
   async function review(auditId, findingId, decision) {
     const key = `${findingId}-${decision}`;
     setReviewBusy(key);
@@ -220,7 +283,6 @@ function App() {
         }
       );
 
-      // Fetch the latest saved audit data from MongoDB
       const data = await request('/audits');
       const updatedAudits = data.audits || [];
 
@@ -507,7 +569,7 @@ function App() {
                 <div className="panel-head">
                   <div>
                     <h3>Submit content for review</h3>
-                    <p>Choose a brand and paste the content you want to check.</p>
+                    <p>Paste text or upload an image/PDF to check against your brand.</p>
                   </div>
                   <div className="ai-pill"><Sparkles size={14} /> AI REVIEW</div>
                 </div>
@@ -546,21 +608,79 @@ function App() {
                       value={auditContent}
                       onChange={e => setAuditContent(e.target.value)}
                       placeholder="Paste your marketing copy, campaign message, social post or product description here…"
-                      required
                     />
 
                     <div className="audit-hint">
-                      <CircleHelp size={15} /> Include the full text for a more useful review.
+                      <CircleHelp size={15} />
+                      Paste text directly, or upload a marketing image or PDF below.
+                    </div>
+
+                    <div className="upload-section">
+                      <label className="field-label">
+                        UPLOAD IMAGE OR PDF
+                      </label>
+
+                      <label className="upload-box" htmlFor="audit-file-input">
+                        <div className="upload-icon">
+                          <Upload size={22} />
+                        </div>
+                        <div className="upload-copy">
+                          <b>Choose a file to upload</b>
+                          <span>JPG, PNG, WEBP or PDF · Maximum 10 MB</span>
+                        </div>
+                        <span className="btn btn-outline upload-button">
+                          Browse files
+                        </span>
+                      </label>
+
+                      <input
+                        id="audit-file-input"
+                        type="file"
+                        accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
+                        onChange={handleFileChange}
+                        hidden
+                      />
+
+                      {auditFile && (
+                        <div className="selected-file">
+                          <div className="selected-file-icon">
+                            {auditFile.type === 'application/pdf'
+                              ? <FileText size={19} />
+                              : <Image size={19} />}
+                          </div>
+
+                          <div className="selected-file-info">
+                            <b>{auditFile.name}</b>
+                            <span>
+                              {(auditFile.size / (1024 * 1024)).toFixed(2)} MB
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title="Remove file"
+                            onClick={() => {
+                              setAuditFile(null);
+                              const input = document.getElementById('audit-file-input');
+                              if (input) input.value = '';
+                            }}
+                          >
+                            <X size={17} />
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     <div className="audit-footer">
                       <div className="privacy-note">
-                        <Shield size={15} /> Reviewed against approved brand guidelines
+                        <Shield size={15} />
+                        Reviewed against approved brand guidelines
                       </div>
 
                       <button
                         className="btn btn-primary"
-                        disabled={auditing || !auditContent.trim()}
+                        disabled={auditing || (!auditContent.trim() && !auditFile)}
                       >
                         {auditing
                           ? <><LoaderCircle className="spin" size={17} /> Analyzing…</>
@@ -919,13 +1039,19 @@ function AuditList({ audits, onOpen }) {
           key={a._id}
           onClick={() => onOpen(a)}
         >
-          <div className="audit-file"><FileText size={17} /></div>
+          <div className="audit-file">
+            {a.sourceType === 'image'
+              ? <Image size={17} />
+              : a.sourceType === 'pdf'
+                ? <FileText size={17} />
+                : <File size={17} />}
+          </div>
 
           <div className="audit-info">
             <b>{a.brand?.name || 'Brand audit'}</b>
             <span>
-              {(a.submittedContent || '').slice(0, 88)}
-              {(a.submittedContent || '').length > 88 ? '…' : ''}
+              {a.fileName || a.submittedContent || ''}
+              {(a.fileName || a.submittedContent || '').length > 88 ? '…' : ''}
             </span>
           </div>
 
@@ -1018,6 +1144,16 @@ function ResultView({ audit, onReview, reviewBusy }) {
         <Sparkles size={17} />
         <p>{audit.summary}</p>
       </div>
+
+      {audit.sourceType && audit.sourceType !== 'text' && (
+        <div className="submitted-box">
+          <span>UPLOADED FILE</span>
+          <p>{audit.fileName || audit.submittedContent}</p>
+          <small>
+            {audit.mimeType} · {((audit.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB
+          </small>
+        </div>
+      )}
 
       <div className="submitted-box">
         <span>SUBMITTED CONTENT</span>
